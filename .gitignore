@@ -39,3 +39,7 @@
 
 # debug information files
 *.dwo
+
+original_python/
+
+.vscode/
