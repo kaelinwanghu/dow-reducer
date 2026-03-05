@@ -87,3 +87,15 @@ avg per DOW: 0.062808 s
 min per DOW: 0.048149 s
 max per DOW: 0.143456 s
 memo entries: 4099172
+
+After getting rid of vectors entirely and using only 1D arrays:
+--- timing ---
+num_dows: 128
+dow_len: 16
+total solve time (sum per DOW): 6.230493 s
+wall time (including IO/normalize/etc): 6.231171 s
+avg per DOW: 0.048676 s
+min per DOW: 0.039020 s
+max per DOW: 0.065272 s
+memo entries: 8113853
+

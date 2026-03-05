@@ -4,31 +4,59 @@
 
 int32_t num_dows;
 int32_t dow_len;
+static constexpr int MAX_LEN = 32;
+static constexpr int MAX_DEPTH = MAX_LEN + 1;
+static constexpr int MAX_CUTS = 2048; // 64^2
+
+struct key
+{
+    uint8_t len;
+    uint8_t s[MAX_LEN * 2]; // 0 to len is valid
+
+    bool operator==(const key& other) const noexcept
+    {
+        uint8_t current_len = len;
+        return current_len == other.len && memcmp(this->s, other.s, current_len) == 0;
+    }
+};
+
+struct key_hash
+{
+    size_t operator()(const key& k) const noexcept
+    {
+        return ankerl::unordered_dense::detail::wyhash::hash(k.s, k.len);
+    }
+};
 
 // Normalizes dow_chars while filling in the normalizer map and precomputing the char_positions
-void normalize_dow(std::string &dow_string, char *normalizer) noexcept
+void normalize_dow(const char *dow_chars, key& out, uint8_t *normalizer) noexcept
 {
-    uint8_t normalized_char = 1;
-    for (int j = 0; j < dow_len * 2; ++j)
+    out.len = dow_len * 2;
+    uint8_t normalizing_char = 0;
+    for (int i = 0; i < dow_len * 2; ++i)
     {
-        unsigned char current_char = static_cast<unsigned char>(dow_string[j]);
-        if (normalizer[current_char] == 0)
+        uint8_t current_char = static_cast<uint8_t>(dow_chars[i]);
+        uint8_t normalized = normalizer[current_char];
+        if (normalized == 0xFF)
         {
-            normalizer[current_char] = normalized_char;
-            ++normalized_char;
+            normalized = normalizing_char;
+            ++normalizing_char;
+            normalizer[current_char] = normalized;
         }
 
-        dow_string[j] = normalizer[current_char];
+        out.s[i] = normalized;
     }
 }
 
-void build_char_positions(const std::string &dow_string, uint16_t *char_positions) noexcept
+// uses dow_string to build character positions
+void build_char_positions(const key &k, uint16_t *char_positions) noexcept
 {
-    int32_t dow_string_size = dow_string.size();
-    for (int i = 0; i < dow_string_size; ++i)
+    int32_t dow_size = k.len;
+    for (int i = 0; i < dow_size; ++i)
     {
-        unsigned char current_char = static_cast<unsigned char>(dow_string[i]);
+        uint8_t current_char = static_cast<uint8_t>(k.s[i]);
         uint16_t pos = char_positions[current_char];
+        // first position is first byte, second position is second byte
         if (pos == 0xFFFFu)
         {
             char_positions[current_char] = static_cast<uint16_t>(static_cast<uint16_t>(i) << 8 | 0xFFu);
@@ -54,13 +82,13 @@ static inline void unpack(cut ct, uint32_t& a, uint32_t& b, uint32_t& c, uint32_
     d = (ct >> 24) & 0xFF;
 }
 
-// Strategy: for all the characters (in char_positions), try to both go inwards (reverse) and forwards (regular), add all occurrences to answer
-void find_all_patterns(const std::string &current_string, uint16_t *char_positions, std::vector<cut>& all_patterns)
+// Strategy: for all the characters (in char_positions), try to both go inwards (reverse) and forwards (regular), add all occurrences to all_patterns
+void find_all_patterns(const key &k, uint16_t *char_positions, cut * out_cuts, uint16_t& out_count)
 {
-    int32_t current_string_size = current_string.size();
-    all_patterns.clear();
+    int32_t current_string_size = k.len;
+    out_count = 0;
 
-    for (int i = 0; i < 256; ++i)
+    for (int i = 0; i < 32; ++i)
     {
         uint16_t pos = char_positions[i];
         if (pos == 0xFFFFu)
@@ -78,11 +106,12 @@ void find_all_patterns(const std::string &current_string, uint16_t *char_positio
         int32_t first_next_idx = first_occurrence, second_next_idx = second_occurrence;
         while (second_next_idx < current_string_size)
         {
-            if (current_string[first_next_idx] != current_string[second_next_idx])
+            if (k.s[first_next_idx] != k.s[second_next_idx])
             {
                 break;
             }
-            all_patterns.emplace_back(pack(static_cast<uint8_t>(first_occurrence), static_cast<uint8_t>(first_next_idx), static_cast<uint8_t>(second_occurrence), static_cast<uint8_t>(second_next_idx)));
+            out_cuts[out_count] = pack(first_occurrence, first_next_idx, second_occurrence, second_next_idx);
+            ++out_count;
             ++first_next_idx;
             ++second_next_idx;
             // INCLUSIVE
@@ -92,56 +121,87 @@ void find_all_patterns(const std::string &current_string, uint16_t *char_positio
         first_next_idx = first_occurrence, second_next_idx = second_occurrence;
         while (first_next_idx < second_next_idx)
         {
-            if (current_string[first_next_idx] != current_string[second_next_idx])
+            if (k.s[first_next_idx] != k.s[second_next_idx])
             {
                 break;
             }
-            all_patterns.emplace_back(pack(static_cast<uint8_t>(first_occurrence), static_cast<uint8_t>(first_next_idx), static_cast<uint8_t>(second_next_idx), static_cast<uint8_t>(second_occurrence)));
+            out_cuts[out_count] = pack(first_occurrence, first_next_idx, second_next_idx, second_occurrence);
+            ++out_count;
             ++first_next_idx;
             --second_next_idx;
         }
     }
 }
 
-int32_t solve(const std::string &dow_string, uint16_t *char_positions, ankerl::unordered_dense::map<std::string, int32_t> &memo, std::vector<cut> *depth_cuts, std::string *temp_strings, const int32_t depth)
+static inline void apply_cut(const key& src, key& dest, uint32_t first_start, uint32_t first_end, uint32_t second_start, uint32_t second_end) noexcept
 {
-    if (dow_string.empty())
+    uint8_t *out = dest.s;
+    uint32_t new_len = 0;
+
+    if (first_start)
+    {
+        memcpy(out + new_len, src.s, first_start);
+        new_len += first_start;
+    }
+    uint32_t mid_begin = first_end + 1;
+
+    // middle
+    uint32_t mid_len = second_start - mid_begin;
+    if (mid_len) 
+    {
+        memcpy(out + new_len, src.s + mid_begin, mid_len);
+        new_len += mid_len;
+    }
+
+    uint32_t tail_begin = second_end + 1;
+    uint32_t tail_len = src.len - tail_begin;
+    if (tail_len)
+    {
+        memcpy(out + new_len, src.s + tail_begin, tail_len);
+        new_len += tail_len;
+    }
+    dest.len = new_len;
+}
+
+// recursive DFS solver with memoization
+uint8_t solve(const key &k, uint16_t *char_positions, ankerl::unordered_dense::map<key, uint8_t, key_hash> &memo, cut *depth_cuts, uint16_t *depth_cut_counts, key * temp_keys, const int32_t depth)
+{
+    if (k.len == 0)
     {
         return 0;
     }
-    auto it = memo.find(dow_string);
+    auto it = memo.find(k);
     if (it != memo.end())
     {
         return it->second;
     }
 
     // Reset character positions for re-normalization
-    memset(char_positions, 0xFF, 256 * sizeof(uint16_t));
-    build_char_positions(dow_string, char_positions);
+    memset(char_positions, 0xFF, 32 * sizeof(uint16_t));
+    build_char_positions(k, char_positions);
 
-    std::vector<cut>& current_cuts = depth_cuts[depth];
+    cut * current_cuts = depth_cuts + (depth * MAX_CUTS);
+    uint16_t cut_count = depth_cut_counts[depth];
 
-    find_all_patterns(dow_string, char_positions, current_cuts);
-    int32_t min_path = INT32_MAX;
-    std::string& temp = temp_strings[depth];
-    for (cut ct : current_cuts)
+    find_all_patterns(k, char_positions, current_cuts, cut_count);
+
+    uint8_t min_path = UINT8_MAX;
+    key &next_key = temp_keys[depth];
+    for (uint16_t i = 0; i < cut_count; ++i)
     {
+        const cut ct = current_cuts[i];
         uint32_t first_start, first_end, second_start, second_end;
         unpack(ct, first_start, first_end, second_start, second_end);
 
-        temp.clear();
-        // No memmove with erase
-        temp.append(dow_string.data(), first_start);
-        temp.append(dow_string.data() + first_end + 1, second_start - (first_end + 1));
-        temp.append(dow_string.data() + second_end + 1, dow_string.size() - (second_end + 1));
+        apply_cut(k, next_key, first_start, first_end, second_start, second_end);
 
-        int32_t current_path = solve(temp, char_positions, memo, depth_cuts, temp_strings, depth + 1) + 1;
+        uint8_t current_path = solve(next_key, char_positions, memo, depth_cuts, depth_cut_counts, temp_keys, depth + 1) + 1;
         if (current_path < min_path)
         {
             min_path = current_path;
         }
     }
-    memo[dow_string] = min_path;
+    memo.try_emplace(k, min_path);
     return min_path;
 }
 
@@ -157,28 +217,23 @@ int main()
     fscanf(data_file, "%d", &num_dows);
     fscanf(data_file, "%d\n", &dow_len);
 
-    char normalizer[256] = {0};
-    ankerl::unordered_dense::map<std::string, int32_t> memo;
-    uint16_t char_positions[256];
+    uint8_t normalizer[256];
+    ankerl::unordered_dense::map<key, uint8_t, key_hash> memo;
+    uint16_t char_positions[MAX_LEN];
+    memo.reserve(1 << 23);
     memset(char_positions, 0xFF, sizeof(char_positions));
-    memo.reserve(1 << 20);
 
     char dow_chars[dow_len * 2 + 1];
     std::string dow_string;
     dow_string.reserve(dow_len * 2 + 1);
 
-    // For all_patterns to avoid continuous memory allocation
-    std::vector<cut> depth_cuts[64];
-    std::string temp_strings[64];
+    // For all_patterns to avoid continuous memory allocation (capped at alphabet of 32)
+    static constexpr int32_t MAX_DEPTH = MAX_LEN + 1;
+    cut depth_cuts[MAX_DEPTH * MAX_CUTS];
+    uint16_t depth_cut_counts[MAX_DEPTH];
+    key temp_keys[MAX_DEPTH];
 
-    int max_depth = std::min(dow_len + 1, 63);
-    for (int i = 0; i <= max_depth; ++i)
-    {
-        // 64^2
-        depth_cuts[i].reserve(4096);
-        // max string length
-        temp_strings[i].reserve(dow_len * 2);
-    }
+    key root;
 
     using clock = std::chrono::steady_clock;
 
@@ -189,12 +244,12 @@ int main()
 
     for (int i = 0; i < num_dows; ++i)
     {
+        memset(normalizer, 0xFF, sizeof(normalizer));
         fread(dow_chars, sizeof(char), dow_len * 2 + 1, data_file);
         dow_chars[dow_len * 2] = '\0';
-        dow_string = dow_chars;
-        normalize_dow(dow_string, normalizer);
+        normalize_dow(dow_chars, root, normalizer);
         auto t0 = clock::now();
-        int32_t answer = solve(dow_string, char_positions, memo, depth_cuts, temp_strings, 0);
+        int32_t answer = solve(root, char_positions, memo, depth_cuts, depth_cut_counts, temp_keys, 0);
         auto t1 = clock::now();
         printf("%d\n", answer);
         double sec = std::chrono::duration<double>(t1 - t0).count();
@@ -207,8 +262,6 @@ int main()
         {
             max_sec = sec;
         }
-
-        memset(normalizer, 0, sizeof(normalizer));
     }
     auto t_all1 = clock::now();
     double wall_sec = std::chrono::duration<double>(t_all1 - t_all0).count();
