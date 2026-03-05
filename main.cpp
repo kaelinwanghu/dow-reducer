@@ -5,31 +5,34 @@ int32_t num_dows;
 int32_t dow_len;
 
 // Normalizes dow_chars while filling in the normalizer map and precomputing the char_positions
-void normalize_dow(char* dow_chars, std::unordered_map<char, char>& normalizer)
+void normalize_dow(std::string& dow_string, std::unordered_map<char, char>& normalizer)
 {
-    char normalized_char = '0';
+    // TODO: when this actually works put this down to 0 instead of the '0' char. Or maybe just add a better print function?
+    char normalized_char = 0;
     for (int j = 0; j < dow_len * 2; ++j)
     {
-        char current_char = dow_chars[j];
+        char current_char = dow_string[j];
         if (normalizer.count(current_char) == 0)
         {
             normalizer[current_char] = normalized_char;
             ++normalized_char;
         }
 
-        dow_chars[j] = normalizer[current_char];
+        dow_string[j] = normalizer[current_char];
     }
 }
 
 void build_char_positions(const std::string& dow_string, std::unordered_map<char, std::pair<int32_t, int32_t>>& char_positions)
 {
     std::unordered_set<char> encountered;
-    for (int i = 0; i < dow_len * 2; ++i)
+    int32_t dow_string_size = dow_string.size();
+    for (int i = 0; i < dow_string_size; ++i)
     {
         char current_char = dow_string[i];
         if (encountered.count(current_char) == 0)
         {
             char_positions[current_char].first = i;
+            encountered.insert(current_char);
         }
         else
         {
@@ -40,9 +43,9 @@ void build_char_positions(const std::string& dow_string, std::unordered_map<char
 
 struct cut_hash
 {
-    auto operator()(const std::tuple<int32_t, int32_t, int32_t, int32_t>& cut_hash)
+    auto operator()(const std::tuple<int32_t, int32_t, int32_t, int32_t>& t) const
     {
-        return std::hash<int32_t>{}(std::get<0>(cut_hash)) ^ std::hash<int32_t>{}(std::get<1>(cut_hash)) ^ std::hash<int32_t>{}(std::get<2>(cut_hash)) ^ std::hash<int32_t>{}(std::get<3>(cut_hash));
+        return std::hash<int32_t>{}(std::get<0>(t)) ^ std::hash<int32_t>{}(std::get<1>(t)) ^ std::hash<int32_t>{}(std::get<2>(t)) ^ std::hash<int32_t>{}(std::get<3>(t));
     }
 };
 
@@ -50,89 +53,93 @@ struct cut_hash
 std::unordered_set<std::tuple<int32_t, int32_t, int32_t, int32_t>, cut_hash> find_all_patterns(const std::string& current_string, std::unordered_map<char, std::pair<int32_t, int32_t>>& char_positions)
 {
     int32_t current_string_size = current_string.size();
+    // printf("current string size: %d\n", current_string_size);
+    // fflush(stdout);
 
     std::unordered_set<std::tuple<int32_t, int32_t, int32_t, int32_t>, cut_hash> patterns;
     patterns.reserve(current_string_size * 2);
+
     for (auto it = char_positions.begin(); it != char_positions.end(); ++it)
     {
         auto [first_occurrence, second_occurrence] = it->second;
+        // printf("char: %c, first occurrence: %d, second occurrence: %d\n", it->first, first_occurrence, second_occurrence);
+        // fflush(stdout);
         // forward matching
         int32_t first_next_idx = first_occurrence, second_next_idx = second_occurrence;
-        char first_next_char = current_string[first_next_idx];
-        char second_next_char = current_string[second_next_idx];
-        while ((first_next_idx >= 0 && first_next_idx < current_string.size()) && (second_next_idx >= 0 && second_next_idx < current_string.size()))
+        char first_next_char;
+        char second_next_char;
+        while (second_next_idx >= 0 && second_next_idx < current_string_size)
         {
-            // INCLUSIVE
-            patterns.emplace(first_occurrence, first_next_idx, second_occurrence, second_next_idx);
-            ++first_next_idx;
-            ++second_next_idx;
             first_next_char = current_string[first_next_idx];
             second_next_char = current_string[second_next_idx];
             if (first_next_char != second_next_char)
             {
                 break;
             }
+            patterns.emplace(first_occurrence, first_next_idx, second_occurrence, second_next_idx);
+            ++first_next_idx;
+            ++second_next_idx;
+            // INCLUSIVE
         }
 
         // backward matching
         first_next_idx = first_occurrence, second_next_idx = second_occurrence;
-        first_next_char = current_string[first_next_idx];
-        second_next_char = current_string[second_next_char];
-        while ((first_next_idx >= 0 && first_next_idx < current_string.size()) && (second_next_idx >= 0 && second_next_idx < current_string.size()) && first_next_idx < second_next_idx)
+        while (first_next_idx < current_string_size && second_next_idx >= 0 && first_next_idx < second_next_idx)
         {
-            // INCLUSIVE
-            patterns.emplace(first_occurrence, first_next_idx, second_next_idx, second_occurrence);
-            ++first_next_idx;
-            --second_next_idx;
             first_next_char = current_string[first_next_idx];
             second_next_char = current_string[second_next_idx];
             if (first_next_char != second_next_char)
             {
                 break;
             }
+            patterns.emplace(first_occurrence, first_next_idx, second_next_idx, second_occurrence);
+            ++first_next_idx;
+            --second_next_idx;
+            // INCLUSIVE
         }
     }
 
     return patterns;
 }
 
-// TODO: memoize
-int32_t solve(const std::string& dow_string, std::unordered_map<std::string, int32_t>& memo)
+int32_t solve(const std::string& dow_string, std::unordered_map<char, std::pair<int32_t, int32_t>>& char_positions, std::unordered_map<std::string, int32_t>& memo)
 {
-    // string, current path
-    std::deque<std::tuple<std::string, int32_t>> reduce_queue;
-    std::unordered_map<char, std::pair<int32_t, int32_t>> char_positions;
-    char_positions.reserve(dow_len);
-    reduce_queue.emplace_back(dow_string, 0);
-    int32_t min_reductions = INT32_MAX;
-    while (!reduce_queue.empty())
+    if (memo.count(dow_string) > 0)
     {
-        auto [current_string, current_path_len] = reduce_queue.front();
-        if (current_path_len < min_reductions)
-        {
-            std::unordered_set<std::tuple<int32_t, int32_t, int32_t, int32_t>, cut_hash> all_patterns = find_all_patterns(dow_string, char_positions);
-            for (auto it = all_patterns.begin(); it != all_patterns.end(); ++it)
-            {
-                auto [first_start, first_end, second_start, second_end] = *it;
-                std::string to_emplace(current_string);
-                // Second goes before first to prevent weird index shifts from happening
-                to_emplace.erase(to_emplace.begin() + second_start, to_emplace.begin() + second_end + 1);
-                to_emplace.erase(to_emplace.begin() + first_start, to_emplace.begin() + first_end + 1);
-                if (!to_emplace.empty())
-                {
-                    min_reductions = current_path_len + 1;
-                    break;
-                }
-                else
-                {
-                    reduce_queue.emplace_back(to_emplace, current_path_len + 1);
-                }
-            }
-        }
-        reduce_queue.pop_front();
+        return memo[dow_string];
     }
 
-    return min_reductions;
+    if (dow_string.empty())
+    {
+        return 0;
+    }
+
+    // printf("current string: %s, current path length: %d\n", dow_string.c_str(), current_path_len);
+    // fflush(stdout);
+    // printf("below min reductions len\n");
+    // fflush(stdout);
+    char_positions.clear();
+    build_char_positions(dow_string, char_positions);
+    std::unordered_set<std::tuple<int32_t, int32_t, int32_t, int32_t>, cut_hash> all_patterns = find_all_patterns(dow_string, char_positions);
+    int32_t min_path = INT32_MAX;
+    for (auto it = all_patterns.begin(); it != all_patterns.end(); ++it)
+    {
+        auto [first_start, first_end, second_start, second_end] = *it;
+        // printf("first_start: %d, first_end: %d, second_start: %d, second_end: %d\n", first_start, first_end, second_start, second_end);
+        // fflush(stdout);
+        std::string to_emplace(dow_string);
+        // Second goes before first to prevent weird index shifts from happening
+        to_emplace.erase(to_emplace.begin() + second_start, to_emplace.begin() + second_end + 1);
+        to_emplace.erase(to_emplace.begin() + first_start, to_emplace.begin() + first_end + 1);
+        int32_t path_solution = solve(to_emplace, char_positions, memo) + 1;
+        if (path_solution < min_path)
+        {
+            min_path = path_solution;
+            memo[dow_string] = path_solution;
+        }
+    }
+
+    return min_path;
 }
 
 int main()
@@ -149,6 +156,7 @@ int main()
 
     std::unordered_map<char, char> normalizer;
     std::unordered_map<std::string, int32_t> memo;
+    memo.reserve(num_dows * num_dows);
     std::unordered_map<char, std::pair<int32_t, int32_t>> char_positions;
     normalizer.reserve(dow_len * 2);
     char_positions.reserve(dow_len);
@@ -157,20 +165,16 @@ int main()
     std::string dow_string;
     dow_string.reserve(dow_len * 2 + 1);
 
-    int answer[num_dows];
-
     for (int i = 0; i < num_dows; ++i)
     {
         fread(dow_chars, sizeof(char), dow_len * 2 + 1, data_file);
         dow_chars[dow_len * 2] = '\0';
-        normalize_dow(dow_chars, normalizer);
         dow_string = dow_chars;
+        normalize_dow(dow_string, normalizer);
+        int32_t answer = solve(dow_string, char_positions, memo);
+        printf("%d\n", answer);
 
-        int32_t solution = solve(dow_string, memo);
-
-        // printf("%s\n", dow_chars);
         normalizer.clear();
-        char_positions.clear();
     }
 
     return 0;
