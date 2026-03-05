@@ -54,4 +54,36 @@ memo entries: 4099172
 
 ## Improvements (Push 3 & 4)
 - standard hashmap and set go since they suck so much
-- better allocation policies
+- better allocation policies (reducing hashmaps unless absolutely necessary (ie memo and patterns))
+
+--- timing ---
+num_dows: 64
+dow_len: 16
+total solve time (sum per DOW): 4.432056 s
+wall time (including IO/normalize/etc): 4.455390 s
+avg per DOW: 0.069251 s
+min per DOW: 0.056447 s
+max per DOW: 0.157445 s
+memo entries: 4099172
+
+- Stop the allocation in find_all_patterns by using depth-based vectors and better cut packing
+- --- timing ---
+num_dows: 64
+dow_len: 16
+total solve time (sum per DOW): 4.185458 s
+wall time (including IO/normalize/etc): 4.207067 s
+avg per DOW: 0.065398 s
+min per DOW: 0.053322 s
+max per DOW: 0.154559 s
+memo entries: 4099172
+
+-- General optimizations and details
+--- timing ---
+num_dows: 64
+dow_len: 16
+total solve time (sum per DOW): 4.019742 s
+wall time (including IO/normalize/etc): 4.042954 s
+avg per DOW: 0.062808 s
+min per DOW: 0.048149 s
+max per DOW: 0.143456 s
+memo entries: 4099172
