@@ -1,13 +1,13 @@
 #include <bits/stdc++.h>
 #include <cstdio>
+#include "lib/unordered_dense.h"
 
 int32_t num_dows;
 int32_t dow_len;
 
 // Normalizes dow_chars while filling in the normalizer map and precomputing the char_positions
-void normalize_dow(std::string& dow_string, std::unordered_map<char, char>& normalizer)
+void normalize_dow(std::string &dow_string, ankerl::unordered_dense::map<char, char> &normalizer)
 {
-    // TODO: when this actually works put this down to 0 instead of the '0' char. Or maybe just add a better print function?
     char normalized_char = 0;
     for (int j = 0; j < dow_len * 2; ++j)
     {
@@ -22,9 +22,9 @@ void normalize_dow(std::string& dow_string, std::unordered_map<char, char>& norm
     }
 }
 
-void build_char_positions(const std::string& dow_string, std::unordered_map<char, std::pair<int32_t, int32_t>>& char_positions)
+void build_char_positions(const std::string &dow_string, ankerl::unordered_dense::map<char, std::pair<int32_t, int32_t>> &char_positions)
 {
-    std::unordered_set<char> encountered;
+    ankerl::unordered_dense::set<char> encountered;
     int32_t dow_string_size = dow_string.size();
     for (int i = 0; i < dow_string_size; ++i)
     {
@@ -41,30 +41,31 @@ void build_char_positions(const std::string& dow_string, std::unordered_map<char
     }
 }
 
+// multiply shift. TODO get rid of this entirely
 struct cut_hash
 {
-    auto operator()(const std::tuple<int32_t, int32_t, int32_t, int32_t>& t) const
+    size_t operator()(const std::tuple<int32_t, int32_t, int32_t, int32_t> &t) const
     {
-        return std::hash<int32_t>{}(std::get<0>(t)) ^ std::hash<int32_t>{}(std::get<1>(t)) ^ std::hash<int32_t>{}(std::get<2>(t)) ^ std::hash<int32_t>{}(std::get<3>(t));
+        size_t h = 0;
+        h ^= std::hash<int32_t>{}(std::get<0>(t)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<int32_t>{}(std::get<1>(t)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<int32_t>{}(std::get<2>(t)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<int32_t>{}(std::get<3>(t)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
     }
 };
 
 // Strategy: for all the characters (in char_positions), try to both go inwards (reverse) and forwards (regular), add all occurrences to answer
-std::unordered_set<std::tuple<int32_t, int32_t, int32_t, int32_t>, cut_hash> find_all_patterns(const std::string& current_string, std::unordered_map<char, std::pair<int32_t, int32_t>>& char_positions)
+ankerl::unordered_dense::set<std::tuple<int32_t, int32_t, int32_t, int32_t>, cut_hash> find_all_patterns(const std::string &current_string, ankerl::unordered_dense::map<char, std::pair<int32_t, int32_t>> &char_positions)
 {
     int32_t current_string_size = current_string.size();
-    // printf("current string size: %d\n", current_string_size);
-    // fflush(stdout);
 
-    std::unordered_set<std::tuple<int32_t, int32_t, int32_t, int32_t>, cut_hash> patterns;
+    ankerl::unordered_dense::set<std::tuple<int32_t, int32_t, int32_t, int32_t>, cut_hash> patterns;
     patterns.reserve(current_string_size * 2);
 
     for (auto it = char_positions.begin(); it != char_positions.end(); ++it)
     {
         auto [first_occurrence, second_occurrence] = it->second;
-        // printf("char: %c, first occurrence: %d, second occurrence: %d\n", it->first, first_occurrence, second_occurrence);
-        // fflush(stdout);
-        // forward matching
         int32_t first_next_idx = first_occurrence, second_next_idx = second_occurrence;
         char first_next_char;
         char second_next_char;
@@ -95,43 +96,37 @@ std::unordered_set<std::tuple<int32_t, int32_t, int32_t, int32_t>, cut_hash> fin
             patterns.emplace(first_occurrence, first_next_idx, second_next_idx, second_occurrence);
             ++first_next_idx;
             --second_next_idx;
-            // INCLUSIVE
         }
     }
 
     return patterns;
 }
 
-int32_t solve(const std::string& dow_string, std::unordered_map<char, std::pair<int32_t, int32_t>>& char_positions, std::unordered_map<std::string, int32_t>& memo)
+int32_t solve(const std::string &dow_string, ankerl::unordered_dense::map<char, std::pair<int32_t, int32_t>> &char_positions, ankerl::unordered_dense::map<std::string, int32_t> &memo)
 {
-    if (memo.count(dow_string) > 0)
+    auto it = memo.find(dow_string);
+    if (it != memo.end())
     {
-        return memo[dow_string];
+        return it->second;
     }
-
     if (dow_string.empty())
     {
         return 0;
     }
 
-    // printf("current string: %s, current path length: %d\n", dow_string.c_str(), current_path_len);
-    // fflush(stdout);
-    // printf("below min reductions len\n");
-    // fflush(stdout);
     char_positions.clear();
     build_char_positions(dow_string, char_positions);
-    std::unordered_set<std::tuple<int32_t, int32_t, int32_t, int32_t>, cut_hash> all_patterns = find_all_patterns(dow_string, char_positions);
+    ankerl::unordered_dense::set<std::tuple<int32_t, int32_t, int32_t, int32_t>, cut_hash> all_patterns = find_all_patterns(dow_string, char_positions);
     int32_t min_path = INT32_MAX;
+    std::string to_add;
+    to_add.reserve(dow_len * 2 + 1);
     for (auto it = all_patterns.begin(); it != all_patterns.end(); ++it)
     {
         auto [first_start, first_end, second_start, second_end] = *it;
-        // printf("first_start: %d, first_end: %d, second_start: %d, second_end: %d\n", first_start, first_end, second_start, second_end);
-        // fflush(stdout);
-        std::string to_emplace(dow_string);
-        // Second goes before first to prevent weird index shifts from happening
-        to_emplace.erase(to_emplace.begin() + second_start, to_emplace.begin() + second_end + 1);
-        to_emplace.erase(to_emplace.begin() + first_start, to_emplace.begin() + first_end + 1);
-        int32_t path_solution = solve(to_emplace, char_positions, memo) + 1;
+        to_add = dow_string;
+        to_add.erase(to_add.begin() + second_start, to_add.begin() + second_end + 1);
+        to_add.erase(to_add.begin() + first_start, to_add.begin() + first_end + 1);
+        int32_t path_solution = solve(to_add, char_positions, memo) + 1;
         if (path_solution < min_path)
         {
             min_path = path_solution;
@@ -145,7 +140,7 @@ int32_t solve(const std::string& dow_string, std::unordered_map<char, std::pair<
 int main()
 {
     // Note: input must be well-formed, or else this is gonna UB
-    FILE *data_file = fopen("data.txt", "ra");
+    FILE *data_file = fopen("test/data.txt", "r");
     if (data_file == NULL)
     {
         perror("Error opening file");
@@ -154,16 +149,23 @@ int main()
     fscanf(data_file, "%d", &num_dows);
     fscanf(data_file, "%d\n", &dow_len);
 
-    std::unordered_map<char, char> normalizer;
-    std::unordered_map<std::string, int32_t> memo;
-    memo.reserve(num_dows * num_dows);
-    std::unordered_map<char, std::pair<int32_t, int32_t>> char_positions;
+    ankerl::unordered_dense::map<char, char> normalizer;
+    ankerl::unordered_dense::map<std::string, int32_t> memo;
+    ankerl::unordered_dense::map<char, std::pair<int32_t, int32_t>> char_positions;
     normalizer.reserve(dow_len * 2);
+    memo.reserve(1 << 20);
     char_positions.reserve(dow_len);
 
     char dow_chars[dow_len * 2 + 1];
     std::string dow_string;
     dow_string.reserve(dow_len * 2 + 1);
+
+    using clock = std::chrono::steady_clock;
+
+    double total_sec = 0.0;
+    double min_sec = std::numeric_limits<double>::infinity();
+    double max_sec = 0.0;
+    auto t_all0 = clock::now();
 
     for (int i = 0; i < num_dows; ++i)
     {
@@ -171,12 +173,38 @@ int main()
         dow_chars[dow_len * 2] = '\0';
         dow_string = dow_chars;
         normalize_dow(dow_string, normalizer);
+        auto t0 = clock::now();
         int32_t answer = solve(dow_string, char_positions, memo);
+        auto t1 = clock::now();
         printf("%d\n", answer);
+        double sec = std::chrono::duration<double>(t1 - t0).count();
+        total_sec += sec;
+        if (sec < min_sec)
+        {
+            min_sec = sec;
+        }
+        if (sec > max_sec)
+        {
+            max_sec = sec;
+        }
 
         normalizer.clear();
     }
+    auto t_all1 = clock::now();
+    double wall_sec = std::chrono::duration<double>(t_all1 - t_all0).count();
+    double avg_sec = (total_sec / num_dows);
 
+    printf("\n--- timing ---\n");
+    printf("num_dows: %d\n", num_dows);
+    printf("dow_len: %d\n", dow_len);
+    printf("total solve time (sum per DOW): %.6f s\n", total_sec);
+    printf("wall time (including IO/normalize/etc): %.6f s\n", wall_sec);
+    printf("avg per DOW: %.6f s\n", avg_sec);
+    printf("min per DOW: %.6f s\n", std::isfinite(min_sec) ? min_sec : 0.0);
+    printf("max per DOW: %.6f s\n", max_sec);
+    printf("memo entries: %zu\n", memo.size());
+
+    fclose(data_file);
     return 0;
 }
 

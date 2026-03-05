@@ -9,3 +9,49 @@
 - Essentially just a very unoptimized version of the original Python code, but already significantly faster
 - Future ideas: arena memory, slap const + noexcept, etc. (experiment with globals/static), better reserve, more testing for speed
   - Actually make better C++ code
+### Initial Testing:
+- Python:
+count: 64
+avg per DOW (s): 3.052477
+total (s): 195.374995
+
+--- cache ---
+CacheInfo(hits=33102353, misses=4099173, maxsize=None, currsize=4099173)
+
+- C++:
+--- timing ---
+num_dows: 64
+dow_len: 16
+total solve time (sum per DOW): 10.544045 s
+wall time (including IO/normalize/etc): 10.544414 s
+avg per DOW: 0.164751 s
+min per DOW: 0.138483 s
+max per DOW: 0.363750 s
+memo entries: 4099172
+
+### Improvements:
+After a slight string rescoping:
+--- timing ---
+num_dows: 64
+dow_len: 16
+total solve time (sum per DOW): 10.020671 s
+wall time (including IO/normalize/etc): 10.042367 s
+avg per DOW: 0.156573 s
+min per DOW: 0.130637 s
+max per DOW: 0.350278 s
+memo entries: 4099172
+
+After using the ankerl map/set as well as a slightly better cut hash function:
+--- timing ---
+num_dows: 64
+dow_len: 16
+total solve time (sum per DOW): 5.191784 s
+wall time (including IO/normalize/etc): 5.217021 s
+avg per DOW: 0.081122 s
+min per DOW: 0.069016 s
+max per DOW: 0.165328 s
+memo entries: 4099172
+
+## Improvements (Push 3 & 4)
+- standard hashmap and set go since they suck so much
+- better allocation policies
