@@ -7,6 +7,7 @@ static constexpr int32_t MAX_LEN = 32;
 static constexpr int32_t MAX_STR = MAX_LEN * 2;
 static constexpr int32_t MAX_DEPTH = MAX_LEN + 1;
 static constexpr int32_t MAX_CUTS = 2048;
+static constexpr int32_t GLOBAL_MEMO_LEN = 10;
 
 using cut = uint32_t;
 static inline cut pack(const uint8_t a, const uint8_t b, const uint8_t c, const uint8_t d) noexcept
@@ -47,8 +48,8 @@ struct context
     int32_t num_dows;
     int32_t dow_len;
     uint32_t current_stamp;
-    ankerl::unordered_dense::map<key, uint8_t, key_hash> memo;
-    uint16_t cut_count[MAX_LEN];
+    ankerl::unordered_dense::map<key, uint8_t, key_hash> memo_global;  // len <= GLOBAL_MEMO_LEN only
+    ankerl::unordered_dense::map<key, uint8_t, key_hash> memo_scratch; // cleared for each dow
     uint16_t char_positions[MAX_LEN];
     uint32_t stamp[MAX_LEN];
     uint8_t normalizer[256];
@@ -222,12 +223,20 @@ static inline uint8_t solve(const key &k, const int32_t depth)
     {
         return 0;
     }
-    auto it = ctx.memo.find(k);
-    if (it != ctx.memo.end())
+    if (k.len <= GLOBAL_MEMO_LEN)
     {
-        return it->second;
+        auto it = ctx.memo_global.find(k);
+        if (it != ctx.memo_global.end())
+            return it->second;
     }
-
+    else
+    {
+        auto it = ctx.memo_scratch.find(k);
+        if (it != ctx.memo_scratch.end())
+        {
+            return it->second;
+        }
+    }
     build_char_positions(k);
 
     cut *current_cuts = ctx.cuts + (depth * MAX_CUTS);
@@ -250,7 +259,8 @@ static inline uint8_t solve(const key &k, const int32_t depth)
             best = current_path;
         }
     }
-    ctx.memo.try_emplace(k, best);
+    if (k.len <= GLOBAL_MEMO_LEN) ctx.memo_global.try_emplace(k, best);
+    else ctx.memo_scratch.try_emplace(k, best);
     return best;
 }
 
@@ -261,7 +271,8 @@ int main()
     fscanf(data_file, "%d", &ctx.num_dows);
     fscanf(data_file, "%d\n", &ctx.dow_len);
 
-    ctx.memo.reserve(1 << 27);
+    ctx.memo_global.reserve(1 << 22);
+    ctx.memo_scratch.reserve(1 << 16);
 
     int32_t dow_string_len = ctx.dow_len * 2;
     char dow_chars[dow_string_len + 1];
@@ -291,6 +302,7 @@ int main()
         //            ctx.memo.load_factor());
         //     prev_memo_size = ctx.memo.size();
         // }
+        ctx.memo_scratch.clear();
         memset(ctx.normalizer, 0xFF, sizeof(ctx.normalizer));
         fread(dow_chars, sizeof(char), dow_string_len + 1, data_file);
         dow_chars[dow_string_len] = '\0';
@@ -336,7 +348,8 @@ int main()
     printf("avg per DOW: %.6f s\n", avg_sec);
     printf("min per DOW: %.6f s\n", std::isfinite(min_sec) ? min_sec : 0.0);
     printf("max per DOW: %.6f s\n", max_sec);
-    printf("memo entries: %zu\n", ctx.memo.size());
+    printf("global memo entries: %zu\n", ctx.memo_global.size());
+    printf("scratch memo entries: %zu\n", ctx.memo_scratch.size());
 
     fclose(data_file);
     fclose(output_file);

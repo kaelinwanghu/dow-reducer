@@ -143,3 +143,59 @@ max per DOW: 0.073736 s
 memo entries: 10107182
 
 We still have to solve the problem of the ever-expanding and coldening memo table, but this was a nice optimization
+
+Idea one: do nothing and test:
+
+--- timing ---
+num_dows: 5052
+dow_len: 16
+total solve time (sum per DOW): 206.253018 s
+wall time (including IO/normalize/etc): 206.273020 s
+avg per DOW: 0.040826 s
+min per DOW: 0.000777 s
+max per DOW: 0.325432 s
+memo entries: 174902154
+
+Idea two: use length-divided memoization
+
+--- timing ---
+num_dows: 5052
+dow_len: 16
+total solve time (sum per DOW): 446.794479 s
+wall time (including IO/normalize/etc): 446.822204 s
+avg per DOW: 0.088439 s
+min per DOW: 0.000731 s
+max per DOW: 17.682028 s
+memo entries: 174902154
+
+(garbage)
+
+Idea three: What if we did length division but had better allocation
+
+--- timing ---
+num_dows: 5052
+dow_len: 16
+total solve time (sum per DOW): 293.281797 s
+wall time (including IO/normalize/etc): 293.310077 s
+avg per DOW: 0.058053 s
+min per DOW: 0.000787 s
+max per DOW: 0.361577 s
+memo entries: 174902154
+
+
+Idea four: small global pool (living in L3 cache hopefully) plus local per-DOW memoization
+
+--- timing ---
+num_dows: 5052
+dow_len: 16
+total solve time (sum per DOW): 68.976476 s
+wall time (including IO/normalize/etc): 69.073878 s
+avg per DOW: 0.013653 s
+min per DOW: 0.000269 s
+max per DOW: 0.038792 s
+global memo entries: 3491646
+scratch memo entries: 14187
+
+(nice)
+
+So that works (with good allocation)
