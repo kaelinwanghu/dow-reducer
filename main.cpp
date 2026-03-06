@@ -13,7 +13,7 @@ static inline cut pack(const uint8_t a, const uint8_t b, const uint8_t c, const 
 {
     return (static_cast<uint32_t>(a)) | (static_cast<uint32_t>(b) << 8) | (static_cast<uint32_t>(c) << 16) | (static_cast<uint32_t>(d) << 24);
 }
-static inline void unpack(cut ct, uint32_t& a, uint32_t& b, uint32_t& c, uint32_t& d) noexcept
+static inline void unpack(cut ct, uint32_t &a, uint32_t &b, uint32_t &c, uint32_t &d) noexcept
 {
     a = ct & 0xFF;
     b = (ct >> 8) & 0xFF;
@@ -26,7 +26,7 @@ struct key
     uint8_t len;
     uint8_t s[MAX_LEN * 2]; // 0 to len is valid
 
-    bool operator==(const key& other) const noexcept
+    bool operator==(const key &other) const noexcept
     {
         uint8_t current_len = len;
         return current_len == other.len && memcmp(this->s, other.s, current_len) == 0;
@@ -36,7 +36,7 @@ struct key
 // <32 alphabetical characters with indices <64, cuts can be packed into a single byte easily
 struct key_hash
 {
-    size_t operator()(const key& k) const noexcept
+    size_t operator()(const key &k) const noexcept
     {
         return ankerl::unordered_dense::detail::wyhash::hash(k.s, k.len);
     }
@@ -59,7 +59,7 @@ struct context
 static context ctx;
 
 // Normalizes dow_chars while filling in the normalizer map and precomputing the char_positions
-static inline void normalize_dow(const char *dow_chars, key& out) noexcept
+static inline void normalize_dow(const char *dow_chars, key &out) noexcept
 {
     int32_t dow_len = ctx.dow_len * 2;
     out.len = dow_len;
@@ -100,52 +100,92 @@ static inline void build_char_positions(const key &k) noexcept
     }
 }
 
-// Strategy: for all the characters (in char_positions), try to both go inwards (reverse) and forwards (regular), add all occurrences to all_patterns
-static inline uint16_t find_all_patterns(const key &k, cut *out_cuts) noexcept
+// This is cobbled together but like efficient for the most part. Dunno why it works
+static inline uint16_t find_maximal_patterns(const key &k, cut *out_cuts) noexcept
 {
-    int32_t current_string_size = k.len;
+    const int32_t n = k.len;
     uint16_t count = 0;
 
-    for (int i = 0; i < 32; ++i)
+    // bitmask over positions
+    uint64_t skip_mask = 0;
+
+    for (int32_t idx = 0; idx < n; ++idx)
     {
-        if (ctx.stamp[i] != ctx.current_stamp)
+        const uint8_t current_char = k.s[idx];
+        const uint16_t pos = ctx.char_positions[current_char];
+        const int32_t first = (pos >> 8) & 0xFF;
+        const int32_t second = pos & 0xFF;
+
+        if (idx != first)
         {
             continue;
         }
-        uint16_t pos = ctx.char_positions[i];
-        int32_t first_occurrence = (pos >> 8) & 0xFF;
-        int32_t second_occurrence = pos & 0xFF;
 
-        int32_t first_next_idx = first_occurrence, second_next_idx = second_occurrence;
-        while (second_next_idx < current_string_size)
+        // Skip by left index
+        if ((skip_mask >> idx) & 1ULL)
         {
-            if (k.s[first_next_idx] != k.s[second_next_idx])
-            {
-                break;
-            }
-            out_cuts[count++] = pack(first_occurrence, first_next_idx, second_occurrence, second_next_idx);
-            ++first_next_idx;
-            ++second_next_idx;
-            // INCLUSIVE
+            continue;
         }
 
-        // backward matching
-        first_next_idx = first_occurrence, second_next_idx = second_occurrence;
-        while (first_next_idx < second_next_idx)
+        const int32_t orig_first = first;
+        const int32_t orig_second = second;
+
+        int32_t a = first;
+        int32_t b = second;
+
+        // Prefer return first
+        if ((b - 1 > a + 1) && (k.s[a + 1] == k.s[b - 1]))
         {
-            if (k.s[first_next_idx] != k.s[second_next_idx])
+            while ((a + 1 < b) && (b - 1 > a + 1))
             {
-                break;
+                if (k.s[a + 1] != k.s[b - 1])
+                {
+                    break;
+                }
+                ++a;
+                --b;
             }
-            out_cuts[count++] = pack(first_occurrence, first_next_idx, second_next_idx, second_occurrence);
-            ++first_next_idx;
-            --second_next_idx;
+
+            // skip left indices
+            for (int32_t j = orig_first; j <= a; ++j)
+            {
+                skip_mask |= (1ULL << j);
+            }
+
+            out_cuts[count++] = pack(static_cast<uint8_t>(orig_first), static_cast<uint8_t>(a), static_cast<uint8_t>(b), static_cast<uint8_t>(orig_second));
+        }
+        // repeat
+        else if ((a + 1 < b) && (b + 1 < n) && (k.s[a + 1] == k.s[b + 1]))
+        {
+            while ((a + 1 < b) && (b + 1 < n))
+            {
+                if (k.s[a + 1] != k.s[b + 1])
+                {
+                    break;
+                }
+                ++a;
+                ++b;
+            }
+
+            for (int32_t j = orig_first; j <= a; ++j)
+            {
+                skip_mask |= (1ULL << j);
+            }
+
+            out_cuts[count++] = pack(static_cast<uint8_t>(orig_first), static_cast<uint8_t>(a), static_cast<uint8_t>(orig_second), static_cast<uint8_t>(b));
+        }
+        else
+        {
+            skip_mask |= (1ULL << orig_first);
+
+            out_cuts[count++] = pack(static_cast<uint8_t>(orig_first), static_cast<uint8_t>(orig_first), static_cast<uint8_t>(orig_second), static_cast<uint8_t>(orig_second));
         }
     }
+
     return count;
 }
 
-static inline void apply_cut(const key& src, key& dest, uint32_t first_start, uint32_t first_end, uint32_t second_start, uint32_t second_end) noexcept
+static inline void apply_cut(const key &src, key &dest, uint32_t first_start, uint32_t first_end, uint32_t second_start, uint32_t second_end) noexcept
 {
     uint8_t *out = dest.s;
     uint32_t new_len = 0;
@@ -159,7 +199,7 @@ static inline void apply_cut(const key& src, key& dest, uint32_t first_start, ui
 
     // middle
     uint32_t mid_len = second_start - mid_begin;
-    if (mid_len) 
+    if (mid_len)
     {
         memcpy(out + new_len, src.s + mid_begin, mid_len);
         new_len += mid_len;
@@ -190,9 +230,9 @@ static inline uint8_t solve(const key &k, const int32_t depth)
 
     build_char_positions(k);
 
-    cut * current_cuts = ctx.cuts + (depth * MAX_CUTS);
+    cut *current_cuts = ctx.cuts + (depth * MAX_CUTS);
 
-    uint16_t cut_count = find_all_patterns(k, current_cuts);
+    uint16_t cut_count = find_maximal_patterns(k, current_cuts);
 
     uint8_t best = UINT8_MAX;
     key &next_key = ctx.temp_keys[depth];
@@ -221,7 +261,7 @@ int main()
     fscanf(data_file, "%d", &ctx.num_dows);
     fscanf(data_file, "%d\n", &ctx.dow_len);
 
-    ctx.memo.reserve(1 << 23);
+    ctx.memo.reserve(1 << 27);
 
     int32_t dow_string_len = ctx.dow_len * 2;
     char dow_chars[dow_string_len + 1];
@@ -238,8 +278,19 @@ int main()
     double max_sec = 0.0;
     auto t_all0 = clock::now();
 
+    // size_t prev_memo_size = 0;
     for (int i = 0; i < ctx.num_dows; ++i)
     {
+        // if (i != 0 && i % 100 == 0)
+        // {
+        //     printf("idx=%d memo_size=%zu prev_memo_size=%zu bucket_count=%zu load=%f\n",
+        //            i,
+        //            ctx.memo.size(),
+        //            ctx.memo.size() - prev_memo_size,
+        //            ctx.memo.bucket_count(),
+        //            ctx.memo.load_factor());
+        //     prev_memo_size = ctx.memo.size();
+        // }
         memset(ctx.normalizer, 0xFF, sizeof(ctx.normalizer));
         fread(dow_chars, sizeof(char), dow_string_len + 1, data_file);
         dow_chars[dow_string_len] = '\0';

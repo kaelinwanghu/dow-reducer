@@ -109,3 +109,37 @@ avg per DOW: 0.045010 s
 min per DOW: 0.038821 s
 max per DOW: 0.052827 s
 memo entries: 8113853
+
+After investigation, it turns out that the memoization was hitting, but the global memo was counterproductive since it got too big for caching
+memo hits: 1709118255
+memo misses: 59500563
+memo inserts: 59500563
+(~95% hit rate, but stable from the first indices forward):
+memo hits: 43802909
+memo misses: 1599478
+memo inserts: 1599478
+
+
+And this was with memoization limiting that ensured that for 16-length DOWs, only 24-length strings and below would be cached. Without this bound:
+memo hits: 999423326
+memo misses: 60197563
+memo inserts: 60197563
+(~94% hit rate, slightly worse)
+Similarly the 94% hit rate maintained itself throughout the run (1024 16-length dows)
+memo hits: 26069481
+memo misses: 1616903
+memo inserts: 1616903
+
+So in conclusion the global memoization was actively making everything slower without helping anything.
+But the original Python function is here to help and save us from the super-expanding memoization table, which led to this
+--- timing ---
+num_dows: 256
+dow_len: 16
+total solve time (sum per DOW): 6.894903 s
+wall time (including IO/normalize/etc): 6.896016 s
+avg per DOW: 0.026933 s
+min per DOW: 0.001659 s
+max per DOW: 0.073736 s
+memo entries: 10107182
+
+We still have to solve the problem of the ever-expanding and coldening memo table, but this was a nice optimization
