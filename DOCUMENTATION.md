@@ -99,3 +99,13 @@ min per DOW: 0.039020 s
 max per DOW: 0.065272 s
 memo entries: 8113853
 
+After more tuning with stamps and global context:
+--- timing ---
+num_dows: 128
+dow_len: 16
+total solve time (sum per DOW): 5.761247 s
+wall time (including IO/normalize/etc): 5.761983 s
+avg per DOW: 0.045010 s
+min per DOW: 0.038821 s
+max per DOW: 0.052827 s
+memo entries: 8113853

@@ -2,11 +2,24 @@
 #include <cstdio>
 #include "lib/unordered_dense.h"
 
-int32_t num_dows;
-int32_t dow_len;
-static constexpr int MAX_LEN = 32;
-static constexpr int MAX_DEPTH = MAX_LEN + 1;
-static constexpr int MAX_CUTS = 2048; // 64^2
+// GUARANTEED to have the max unique alphabet be <= 32. The program literally will not work otherwise
+static constexpr int32_t MAX_LEN = 32;
+static constexpr int32_t MAX_STR = MAX_LEN * 2;
+static constexpr int32_t MAX_DEPTH = MAX_LEN + 1;
+static constexpr int32_t MAX_CUTS = 2048;
+
+using cut = uint32_t;
+static inline cut pack(const uint8_t a, const uint8_t b, const uint8_t c, const uint8_t d) noexcept
+{
+    return (static_cast<uint32_t>(a)) | (static_cast<uint32_t>(b) << 8) | (static_cast<uint32_t>(c) << 16) | (static_cast<uint32_t>(d) << 24);
+}
+static inline void unpack(cut ct, uint32_t& a, uint32_t& b, uint32_t& c, uint32_t& d) noexcept
+{
+    a = ct & 0xFF;
+    b = (ct >> 8) & 0xFF;
+    c = (ct >> 16) & 0xFF;
+    d = (ct >> 24) & 0xFF;
+}
 
 struct key
 {
@@ -20,6 +33,7 @@ struct key
     }
 };
 
+// <32 alphabetical characters with indices <64, cuts can be packed into a single byte easily
 struct key_hash
 {
     size_t operator()(const key& k) const noexcept
@@ -28,20 +42,37 @@ struct key_hash
     }
 };
 
-// Normalizes dow_chars while filling in the normalizer map and precomputing the char_positions
-void normalize_dow(const char *dow_chars, key& out, uint8_t *normalizer) noexcept
+struct context
 {
-    out.len = dow_len * 2;
+    int32_t num_dows;
+    int32_t dow_len;
+    uint32_t current_stamp;
+    ankerl::unordered_dense::map<key, uint8_t, key_hash> memo;
+    uint16_t cut_count[MAX_LEN];
+    uint16_t char_positions[MAX_LEN];
+    uint32_t stamp[MAX_LEN];
+    uint8_t normalizer[256];
+    key temp_keys[MAX_DEPTH];
+    cut cuts[MAX_DEPTH * MAX_CUTS];
+};
+
+static context ctx;
+
+// Normalizes dow_chars while filling in the normalizer map and precomputing the char_positions
+static inline void normalize_dow(const char *dow_chars, key& out) noexcept
+{
+    int32_t dow_len = ctx.dow_len * 2;
+    out.len = dow_len;
     uint8_t normalizing_char = 0;
-    for (int i = 0; i < dow_len * 2; ++i)
+    for (int i = 0; i < dow_len; ++i)
     {
         uint8_t current_char = static_cast<uint8_t>(dow_chars[i]);
-        uint8_t normalized = normalizer[current_char];
+        uint8_t normalized = ctx.normalizer[current_char];
         if (normalized == 0xFF)
         {
             normalized = normalizing_char;
             ++normalizing_char;
-            normalizer[current_char] = normalized;
+            ctx.normalizer[current_char] = normalized;
         }
 
         out.s[i] = normalized;
@@ -49,59 +80,41 @@ void normalize_dow(const char *dow_chars, key& out, uint8_t *normalizer) noexcep
 }
 
 // uses dow_string to build character positions
-void build_char_positions(const key &k, uint16_t *char_positions) noexcept
+static inline void build_char_positions(const key &k) noexcept
 {
+    uint32_t new_stamp = ++ctx.current_stamp;
     int32_t dow_size = k.len;
     for (int i = 0; i < dow_size; ++i)
     {
         uint8_t current_char = static_cast<uint8_t>(k.s[i]);
-        uint16_t pos = char_positions[current_char];
-        // first position is first byte, second position is second byte
-        if (pos == 0xFFFFu)
+        if (ctx.stamp[current_char] != new_stamp)
         {
-            char_positions[current_char] = static_cast<uint16_t>(static_cast<uint16_t>(i) << 8 | 0xFFu);
+            ctx.stamp[current_char] = new_stamp;
+            ctx.char_positions[current_char] = (static_cast<uint16_t>(i) << 8) | 0xFF;
         }
         else
         {
-            char_positions[current_char] = static_cast<uint16_t>((pos & 0xFF00u) | static_cast<uint16_t>(i));
+            uint16_t pos = ctx.char_positions[current_char];
+            ctx.char_positions[current_char] = (pos & 0xFF00u) | static_cast<uint16_t>(i);
         }
     }
 }
 
-// <32 alphabetical characters with indices <64, cuts can be packed into a single byte easily
-using cut = uint32_t;
-static inline cut pack(const uint8_t a, const uint8_t b, const uint8_t c, const uint8_t d) noexcept
-{
-    return (static_cast<uint32_t>(a)) | (static_cast<uint32_t>(b) << 8) | (static_cast<uint32_t>(c) << 16) | (static_cast<uint32_t>(d) << 24);
-}
-static inline void unpack(cut ct, uint32_t& a, uint32_t& b, uint32_t& c, uint32_t& d)
-{
-    a = ct & 0xFF;
-    b = (ct >> 8) & 0xFF;
-    c = (ct >> 16) & 0xFF;
-    d = (ct >> 24) & 0xFF;
-}
-
 // Strategy: for all the characters (in char_positions), try to both go inwards (reverse) and forwards (regular), add all occurrences to all_patterns
-void find_all_patterns(const key &k, uint16_t *char_positions, cut * out_cuts, uint16_t& out_count)
+static inline uint16_t find_all_patterns(const key &k, cut *out_cuts) noexcept
 {
     int32_t current_string_size = k.len;
-    out_count = 0;
+    uint16_t count = 0;
 
     for (int i = 0; i < 32; ++i)
     {
-        uint16_t pos = char_positions[i];
-        if (pos == 0xFFFFu)
+        if (ctx.stamp[i] != ctx.current_stamp)
         {
             continue;
         }
+        uint16_t pos = ctx.char_positions[i];
         int32_t first_occurrence = (pos >> 8) & 0xFF;
         int32_t second_occurrence = pos & 0xFF;
-        // safety
-        if (second_occurrence == 0xFF)
-        {
-            continue;
-        }
 
         int32_t first_next_idx = first_occurrence, second_next_idx = second_occurrence;
         while (second_next_idx < current_string_size)
@@ -110,8 +123,7 @@ void find_all_patterns(const key &k, uint16_t *char_positions, cut * out_cuts, u
             {
                 break;
             }
-            out_cuts[out_count] = pack(first_occurrence, first_next_idx, second_occurrence, second_next_idx);
-            ++out_count;
+            out_cuts[count++] = pack(first_occurrence, first_next_idx, second_occurrence, second_next_idx);
             ++first_next_idx;
             ++second_next_idx;
             // INCLUSIVE
@@ -125,12 +137,12 @@ void find_all_patterns(const key &k, uint16_t *char_positions, cut * out_cuts, u
             {
                 break;
             }
-            out_cuts[out_count] = pack(first_occurrence, first_next_idx, second_next_idx, second_occurrence);
-            ++out_count;
+            out_cuts[count++] = pack(first_occurrence, first_next_idx, second_next_idx, second_occurrence);
             ++first_next_idx;
             --second_next_idx;
         }
     }
+    return count;
 }
 
 static inline void apply_cut(const key& src, key& dest, uint32_t first_start, uint32_t first_end, uint32_t second_start, uint32_t second_end) noexcept
@@ -164,29 +176,26 @@ static inline void apply_cut(const key& src, key& dest, uint32_t first_start, ui
 }
 
 // recursive DFS solver with memoization
-uint8_t solve(const key &k, uint16_t *char_positions, ankerl::unordered_dense::map<key, uint8_t, key_hash> &memo, cut *depth_cuts, uint16_t *depth_cut_counts, key * temp_keys, const int32_t depth)
+static inline uint8_t solve(const key &k, const int32_t depth)
 {
     if (k.len == 0)
     {
         return 0;
     }
-    auto it = memo.find(k);
-    if (it != memo.end())
+    auto it = ctx.memo.find(k);
+    if (it != ctx.memo.end())
     {
         return it->second;
     }
 
-    // Reset character positions for re-normalization
-    memset(char_positions, 0xFF, 32 * sizeof(uint16_t));
-    build_char_positions(k, char_positions);
+    build_char_positions(k);
 
-    cut * current_cuts = depth_cuts + (depth * MAX_CUTS);
-    uint16_t cut_count = depth_cut_counts[depth];
+    cut * current_cuts = ctx.cuts + (depth * MAX_CUTS);
 
-    find_all_patterns(k, char_positions, current_cuts, cut_count);
+    uint16_t cut_count = find_all_patterns(k, current_cuts);
 
-    uint8_t min_path = UINT8_MAX;
-    key &next_key = temp_keys[depth];
+    uint8_t best = UINT8_MAX;
+    key &next_key = ctx.temp_keys[depth];
     for (uint16_t i = 0; i < cut_count; ++i)
     {
         const cut ct = current_cuts[i];
@@ -195,45 +204,32 @@ uint8_t solve(const key &k, uint16_t *char_positions, ankerl::unordered_dense::m
 
         apply_cut(k, next_key, first_start, first_end, second_start, second_end);
 
-        uint8_t current_path = solve(next_key, char_positions, memo, depth_cuts, depth_cut_counts, temp_keys, depth + 1) + 1;
-        if (current_path < min_path)
+        uint8_t current_path = solve(next_key, depth + 1) + 1;
+        if (current_path < best)
         {
-            min_path = current_path;
+            best = current_path;
         }
     }
-    memo.try_emplace(k, min_path);
-    return min_path;
+    ctx.memo.try_emplace(k, best);
+    return best;
 }
 
 int main()
 {
     // Note: input must be well-formed, or else this is gonna UB
     FILE *data_file = fopen("test/data.txt", "r");
-    if (data_file == NULL)
-    {
-        perror("Error opening file");
-        exit(1);
-    }
-    fscanf(data_file, "%d", &num_dows);
-    fscanf(data_file, "%d\n", &dow_len);
+    fscanf(data_file, "%d", &ctx.num_dows);
+    fscanf(data_file, "%d\n", &ctx.dow_len);
 
-    uint8_t normalizer[256];
-    ankerl::unordered_dense::map<key, uint8_t, key_hash> memo;
-    uint16_t char_positions[MAX_LEN];
-    memo.reserve(1 << 23);
-    memset(char_positions, 0xFF, sizeof(char_positions));
+    ctx.memo.reserve(1 << 23);
 
-    char dow_chars[dow_len * 2 + 1];
-    std::string dow_string;
-    dow_string.reserve(dow_len * 2 + 1);
-
-    // For all_patterns to avoid continuous memory allocation (capped at alphabet of 32)
-    static constexpr int32_t MAX_DEPTH = MAX_LEN + 1;
-    cut depth_cuts[MAX_DEPTH * MAX_CUTS];
-    uint16_t depth_cut_counts[MAX_DEPTH];
-    key temp_keys[MAX_DEPTH];
+    int32_t dow_string_len = ctx.dow_len * 2;
+    char dow_chars[dow_string_len + 1];
 
     key root;
+    // 2 digits and a newline
+    char output_buf[ctx.num_dows * 3];
+    uint32_t output_idx = 0;
 
     using clock = std::chrono::steady_clock;
 
@@ -242,16 +238,27 @@ int main()
     double max_sec = 0.0;
     auto t_all0 = clock::now();
 
-    for (int i = 0; i < num_dows; ++i)
+    for (int i = 0; i < ctx.num_dows; ++i)
     {
-        memset(normalizer, 0xFF, sizeof(normalizer));
-        fread(dow_chars, sizeof(char), dow_len * 2 + 1, data_file);
-        dow_chars[dow_len * 2] = '\0';
-        normalize_dow(dow_chars, root, normalizer);
+        memset(ctx.normalizer, 0xFF, sizeof(ctx.normalizer));
+        fread(dow_chars, sizeof(char), dow_string_len + 1, data_file);
+        dow_chars[dow_string_len] = '\0';
+        normalize_dow(dow_chars, root);
         auto t0 = clock::now();
-        int32_t answer = solve(root, char_positions, memo, depth_cuts, depth_cut_counts, temp_keys, 0);
+        uint8_t answer = solve(root, 0);
         auto t1 = clock::now();
-        printf("%d\n", answer);
+
+        if (answer >= 10)
+        {
+            output_buf[output_idx++] = ('0' + answer / 10);
+            output_buf[output_idx++] = ('0' + answer % 10);
+        }
+        else
+        {
+            output_buf[output_idx++] = '0' + answer;
+        }
+        output_buf[output_idx++] = '\n';
+
         double sec = std::chrono::duration<double>(t1 - t0).count();
         total_sec += sec;
         if (sec < min_sec)
@@ -263,20 +270,24 @@ int main()
             max_sec = sec;
         }
     }
+    FILE *output_file = fopen("test/output.txt", "w");
+    fwrite(output_buf, 1, output_idx, output_file);
+
     auto t_all1 = clock::now();
     double wall_sec = std::chrono::duration<double>(t_all1 - t_all0).count();
-    double avg_sec = (total_sec / num_dows);
+    double avg_sec = (total_sec / ctx.num_dows);
 
     printf("\n--- timing ---\n");
-    printf("num_dows: %d\n", num_dows);
-    printf("dow_len: %d\n", dow_len);
+    printf("num_dows: %d\n", ctx.num_dows);
+    printf("dow_len: %d\n", ctx.dow_len);
     printf("total solve time (sum per DOW): %.6f s\n", total_sec);
     printf("wall time (including IO/normalize/etc): %.6f s\n", wall_sec);
     printf("avg per DOW: %.6f s\n", avg_sec);
     printf("min per DOW: %.6f s\n", std::isfinite(min_sec) ? min_sec : 0.0);
     printf("max per DOW: %.6f s\n", max_sec);
-    printf("memo entries: %zu\n", memo.size());
+    printf("memo entries: %zu\n", ctx.memo.size());
 
     fclose(data_file);
+    fclose(output_file);
     return 0;
 }
