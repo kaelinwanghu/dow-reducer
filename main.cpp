@@ -133,18 +133,23 @@ static inline uint16_t find_maximal_patterns(const key &k, cut *out_cuts) noexce
 
         int32_t a = first;
         int32_t b = second;
+        int32_t a_next = a + 1;
+        int32_t b_next = b - 1;
+        int32_t b_next_repeat = b + 1;
 
         // Prefer return first
-        if ((b - 1 > a + 1) && (k.s[a + 1] == k.s[b - 1]))
+        if ((b_next > a_next) && (k.s[a_next] == k.s[b_next]))
         {
-            while ((a + 1 < b) && (b - 1 > a + 1))
+            while ((a_next < b) && (b_next > a_next))
             {
-                if (k.s[a + 1] != k.s[b - 1])
+                if (k.s[a_next] != k.s[b_next])
                 {
                     break;
                 }
                 ++a;
+                a_next = a + 1;
                 --b;
+                b_next = b - 1;
             }
 
             // skip left indices
@@ -156,16 +161,18 @@ static inline uint16_t find_maximal_patterns(const key &k, cut *out_cuts) noexce
             out_cuts[count++] = pack(static_cast<uint8_t>(orig_first), static_cast<uint8_t>(a), static_cast<uint8_t>(b), static_cast<uint8_t>(orig_second));
         }
         // repeat
-        else if ((a + 1 < b) && (b + 1 < n) && (k.s[a + 1] == k.s[b + 1]))
+        else if ((a_next < b) && (b_next_repeat < n) && (k.s[a_next] == k.s[b_next_repeat]))
         {
-            while ((a + 1 < b) && (b + 1 < n))
+            while ((a_next < b) && (b_next_repeat < n))
             {
-                if (k.s[a + 1] != k.s[b + 1])
+                if (k.s[a_next] != k.s[b_next_repeat])
                 {
                     break;
                 }
                 ++a;
+                a_next = a + 1;
                 ++b;
+                b_next_repeat = b + 1;
             }
 
             for (int32_t j = orig_first; j <= a; ++j)
@@ -227,7 +234,9 @@ static inline uint8_t solve(const key &k, const int32_t depth)
     {
         auto it = ctx.memo_global.find(k);
         if (it != ctx.memo_global.end())
+        {
             return it->second;
+        }
     }
     else
     {
