@@ -7,8 +7,8 @@ static constexpr int32_t MAX_LEN = 32;
 static constexpr int32_t MAX_STR = MAX_LEN * 2;
 static constexpr int32_t MAX_DEPTH = MAX_LEN + 1;
 static constexpr int32_t MAX_CUTS = 2048;
-static constexpr int32_t GLOBAL_MEMO_LEN = 12;
-static constexpr int32_t MAX_POS = MAX_LEN * 2;
+#define INPUT_FILE "test/data20.txt"
+#define OUTPUT_FILE "test/output20.txt"
 
 using cut = uint32_t;
 static inline cut pack(const uint8_t a, const uint8_t b, const uint8_t c, const uint8_t d) noexcept
@@ -26,7 +26,7 @@ static inline void unpack(cut ct, uint32_t &a, uint32_t &b, uint32_t &c, uint32_
 struct key
 {
     uint8_t len;
-    uint8_t mate[MAX_POS]; // 0 to len is valid
+    uint8_t mate[MAX_STR]; // 0 to len is valid
 
     bool operator==(const key &other) const noexcept
     {
@@ -48,7 +48,6 @@ struct context
 {
     int32_t num_dows;
     int32_t dow_len;
-    ankerl::unordered_dense::map<key, uint8_t, key_hash> memo_global;  // len <= GLOBAL_MEMO_LEN only
     ankerl::unordered_dense::map<key, uint8_t, key_hash> memo_scratch; // cleared for each dow
     key temp_keys[MAX_DEPTH];
     uint16_t first_pos[256];
@@ -211,21 +210,10 @@ static inline uint8_t solve(const key &k, const int32_t depth)
     {
         return 0;
     }
-    if (k.len <= GLOBAL_MEMO_LEN)
+    auto it = ctx.memo_scratch.find(k);
+    if (it != ctx.memo_scratch.end())
     {
-        auto it = ctx.memo_global.find(k);
-        if (it != ctx.memo_global.end())
-        {
-            return it->second;
-        }
-    }
-    else
-    {
-        auto it = ctx.memo_scratch.find(k);
-        if (it != ctx.memo_scratch.end())
-        {
-            return it->second;
-        }
+        return it->second;
     }
 
     cut *current_cuts = ctx.cuts + (depth * MAX_CUTS);
@@ -248,33 +236,25 @@ static inline uint8_t solve(const key &k, const int32_t depth)
             best = current_path;
         }
     }
-    if (k.len <= GLOBAL_MEMO_LEN)
-    {
-        ctx.memo_global.try_emplace(k, best);
-    }
-    else
-    {
-        ctx.memo_scratch.try_emplace(k, best);
-    }
+    ctx.memo_scratch.try_emplace(k, best);
     return best;
 }
 
 int main()
 {
     // Note: input must be well-formed, or else this is gonna UB
-    FILE *data_file = fopen("test/data.txt", "r");
+    FILE *data_file = fopen(INPUT_FILE, "r");
     fscanf(data_file, "%d", &ctx.num_dows);
     fscanf(data_file, "%d\n", &ctx.dow_len);
 
-    ctx.memo_global.reserve(1 << 20);
-    ctx.memo_scratch.reserve(1 << 16);
+    ctx.memo_scratch.reserve(std::min(1 << (ctx.dow_len - 2), 1 << 20));
 
     int32_t dow_string_len = ctx.dow_len * 2;
-    char dow_chars[dow_string_len + 1];
+    char dow_chars[MAX_STR + 1];
 
     key root;
     // 2 digits and a newline
-    char output_buf[ctx.num_dows * 3];
+    char * output_buf = static_cast<char *>(malloc(ctx.num_dows * 3));
     uint32_t output_idx = 0;
 
     using clock = std::chrono::steady_clock;
@@ -327,7 +307,7 @@ int main()
             max_sec = sec;
         }
     }
-    FILE *output_file = fopen("test/output.txt", "w");
+    FILE *output_file = fopen(OUTPUT_FILE, "w");
     fwrite(output_buf, 1, output_idx, output_file);
 
     auto t_all1 = clock::now();
@@ -342,10 +322,10 @@ int main()
     printf("avg per DOW: %.6f s\n", avg_sec);
     printf("min per DOW: %.6f s\n", std::isfinite(min_sec) ? min_sec : 0.0);
     printf("max per DOW: %.6f s\n", max_sec);
-    printf("global memo entries: %zu\n", ctx.memo_global.size());
     printf("scratch memo entries: %zu\n", ctx.memo_scratch.size());
 
     fclose(data_file);
     fclose(output_file);
+    free(output_buf);
     return 0;
 }
