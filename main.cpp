@@ -9,10 +9,10 @@ static constexpr int32_t MAX_LEN  = 32;
 static constexpr int32_t MAX_STR  = MAX_LEN * 2;
 static constexpr int32_t MAX_DEPTH = MAX_LEN + 1;
 static constexpr int32_t MAX_CUTS = 2048;
-static constexpr int32_t WORK_CHUNK = 8;
+static constexpr int32_t WORK_CHUNK = 4;
 
-#define INPUT_FILE  "test/data.txt"
-#define OUTPUT_FILE "test/output.txt"
+#define INPUT_FILE  "test/data20.txt"
+#define OUTPUT_FILE "test/output20.txt"
 
 using cut = uint32_t;
 
@@ -53,6 +53,7 @@ struct alignas(64) context
     ankerl::unordered_dense::map<key, uint8_t, key_hash> memo_scratch;
     key temp_keys[MAX_DEPTH];
     cut cuts[MAX_DEPTH * MAX_CUTS];
+    uint8_t remap[MAX_STR];
     uint16_t first_pos[256];
 };
 
@@ -154,29 +155,45 @@ static inline uint16_t find_maximal_patterns(const key &k, cut *out_cuts) noexce
     return count;
 }
 
-static inline void apply_cut(const key &src, key &dest, uint32_t first_start, uint32_t first_end, uint32_t second_start, uint32_t second_end) noexcept
+static inline void apply_cut(context& ctx, const key &src, key &dest, uint32_t first_start, uint32_t first_end, uint32_t second_start, uint32_t second_end) noexcept
 {
     uint32_t mid_begin = first_end + 1;
-    uint32_t mid_len   = second_start - mid_begin;
+    uint32_t mid_len = second_start - mid_begin;
     uint32_t tail_begin = second_end + 1;
-    uint32_t new_len   = src.len - (first_end - first_start + 1) - (second_end - second_start + 1);
+    uint32_t new_len = src.len - (first_end - first_start + 1) - (second_end - second_start + 1);
     dest.len = static_cast<uint8_t>(new_len);
-    uint8_t *out = dest.mate;
-
-    auto get_new_pos = [&](uint32_t p) -> uint8_t
+    uint32_t i = 0;
+    for (; i < first_start; ++i)
     {
-        if (p < first_start) return static_cast<uint8_t>(p);
-        if (p < second_start) return static_cast<uint8_t>(first_start + (p - mid_begin));
-        return static_cast<uint8_t>(first_start + mid_len + (p - tail_begin));
-    };
+        ctx.remap[i] = static_cast<uint8_t>(i);
+    }
+    for (; i < second_start; ++i)
+    {
+        ctx.remap[i] = static_cast<uint8_t>(first_start + (i - mid_begin));
+    }
+    for (; i < src.len; ++i)
+    {
+        ctx.remap[i] = static_cast<uint8_t>(first_start + mid_len + (i - tail_begin));
+    }
 
+    uint8_t *out = dest.mate;
     uint32_t idx = 0;
-    for (uint32_t i = 0; i < first_start; ++i) out[idx++] = get_new_pos(src.mate[i]);
-    for (uint32_t i = mid_begin;  i < second_start; ++i) out[idx++] = get_new_pos(src.mate[i]);
-    for (uint32_t i = tail_begin; i < src.len; ++i) out[idx++] = get_new_pos(src.mate[i]);
+    for (uint32_t j = 0; j < first_start;  ++j)
+    {
+        out[idx++] = ctx.remap[src.mate[j]];
+    }
+    for (uint32_t j = mid_begin; j < second_start; ++j)
+    {
+        out[idx++] = ctx.remap[src.mate[j]];
+    }
+    for (uint32_t j = tail_begin; j < src.len; ++j)
+    {
+        out[idx++] = ctx.remap[src.mate[j]];
+    }
+
 }
 
-static uint8_t solve(context &ctx, const key &k, const int32_t depth)
+static inline uint8_t solve(context &ctx, const key &k, const int32_t depth)
 {
     if (k.len == 0)
     {
@@ -197,7 +214,7 @@ static uint8_t solve(context &ctx, const key &k, const int32_t depth)
     {
         uint32_t fs, fe, ss, se;
         unpack(current_cuts[i], fs, fe, ss, se);
-        apply_cut(k, next_key, fs, fe, ss, se);
+        apply_cut(ctx, k, next_key, fs, fe, ss, se);
         uint8_t v = solve(ctx, next_key, depth + 1) + 1;
         if (v < best) best = v;
     }
