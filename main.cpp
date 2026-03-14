@@ -5,14 +5,14 @@
 #include "lib/unordered_dense.h"
 
 // GUARANTEED to have the max unique alphabet be <= 32.
-static constexpr int32_t MAX_LEN  = 32;
-static constexpr int32_t MAX_STR  = MAX_LEN * 2;
+static constexpr int32_t MAX_LEN = 32;
+static constexpr int32_t MAX_STR = MAX_LEN * 2;
 static constexpr int32_t MAX_DEPTH = MAX_LEN + 1;
 static constexpr int32_t MAX_CUTS = 2048;
 static constexpr int32_t WORK_CHUNK = 4;
 
 #define INPUT_FILE  "test/data20.txt"
-#define OUTPUT_FILE "test/output20.txt"
+#define OUTPUT_FILE "test/output20_test.txt"
 
 using cut = uint32_t;
 
@@ -81,9 +81,9 @@ static inline void build_mate(const char *dow_chars, key &out, context &ctx) noe
         }
         else
         {
-            uint8_t left  = static_cast<uint8_t>(ctx.first_pos[c]);
+            uint8_t left = static_cast<uint8_t>(ctx.first_pos[c]);
             uint8_t right = static_cast<uint8_t>(i);
-            out.mate[left]  = right;
+            out.mate[left] = right;
             out.mate[right] = left;
         }
     }
@@ -92,7 +92,7 @@ static inline void build_mate(const char *dow_chars, key &out, context &ctx) noe
 static inline uint16_t find_maximal_patterns(const key &k, cut *out_cuts) noexcept
 {
     const int32_t n = k.len;
-    uint16_t count  = 0;
+    uint16_t count = 0;
     uint64_t skip_mask = 0;
 
     for (int32_t idx = 0; idx < n; ++idx)
@@ -120,7 +120,10 @@ static inline uint16_t find_maximal_patterns(const key &k, cut *out_cuts) noexce
         {
             while ((a_next < b) && (b_next > a_next))
             {
-                if (k.mate[a_next] != b_next) break;
+                if (k.mate[a_next] != b_next)
+                {
+                    break;
+                }
                 ++a; a_next = a + 1;
                 --b; b_next = b - 1;
             }
@@ -134,7 +137,10 @@ static inline uint16_t find_maximal_patterns(const key &k, cut *out_cuts) noexce
         {
             while ((a_next < b) && (b_next_repeat < n))
             {
-                if (k.mate[a_next] != b_next_repeat) break;
+                if (k.mate[a_next] != b_next_repeat)
+                {
+                    break;
+                }
                 ++a; 
                 a_next = a + 1;
                 ++b;
@@ -216,14 +222,14 @@ static inline uint8_t solve(context &ctx, const key &k, const int32_t depth)
         unpack(current_cuts[i], fs, fe, ss, se);
         apply_cut(ctx, k, next_key, fs, fe, ss, se);
         uint8_t v = solve(ctx, next_key, depth + 1) + 1;
-        if (v < best) best = v;
+        best = v < best ? v : best;
     }
 
     ctx.memo_scratch.try_emplace(k, best);
     return best;
 }
 
-static void worker_thread(context *ctx, int32_t scratch_reserve)
+static void worker_thread(context *ctx)
 {
     const int32_t dow_stride = g_dow_len * 2 + 1; // +1 for newline/null
     key root;
@@ -231,7 +237,10 @@ static void worker_thread(context *ctx, int32_t scratch_reserve)
     while (true)
     {
         int32_t start = g_next_dow.fetch_add(WORK_CHUNK, std::memory_order_relaxed);
-        if (start >= g_num_dows) break;
+        if (start >= g_num_dows)
+        {
+            break;
+        }
 
         int32_t end = std::min(start + WORK_CHUNK, g_num_dows);
         for (int32_t i = start; i < end; ++i)
@@ -281,23 +290,17 @@ int main(int argc, char *argv[])
         ctxs[t]->memo_scratch.reserve(scratch_reserve);
     }
 
-    using clock = std::chrono::steady_clock;
-    auto t_all0 = clock::now();
-
     // Launch threads
     std::vector<std::thread> threads;
     threads.reserve(num_threads);
     for (int t = 0; t < num_threads; ++t)
     {
-        threads.emplace_back(worker_thread, ctxs[t], scratch_reserve);
+        threads.emplace_back(worker_thread, ctxs[t]);
     }
     for (auto &th : threads)
     {
         th.join();
     }
-
-    auto t_all1 = clock::now();
-    double wall_sec = std::chrono::duration<double>(t_all1 - t_all0).count();
 
     char *output_buf = static_cast<char *>(malloc(g_num_dows * 3));
     uint32_t output_idx = 0;
@@ -318,13 +321,6 @@ int main(int argc, char *argv[])
     FILE *output_file = fopen(OUTPUT_FILE, "w");
     fwrite(output_buf, 1, output_idx, output_file);
     fclose(output_file);
-
-    printf("\n--- timing ---\n");
-    printf("num_dows: %d\n", g_num_dows);
-    printf("dow_len: %d\n", g_dow_len);
-    printf("num_threads: %d\n", num_threads);
-    printf("wall time: %.6f s\n", wall_sec);
-    printf("avg per DOW: %.6f s\n", wall_sec / g_num_dows);
 
     // Cleanup
     for (int t = 0; t < num_threads; ++t)
